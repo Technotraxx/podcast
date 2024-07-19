@@ -69,7 +69,8 @@ def transcribe_audio(audio_content):
                 language="de",  # Angepasst für deutsche Podcasts
                 temperature=0.0
             )
-        return transcription.text
+        # Die API gibt direkt den transkribierten Text zurück, nicht ein Objekt
+        return transcription
     except Exception as e:
         st.error(f"Error during transcription: {e}")
         return None
