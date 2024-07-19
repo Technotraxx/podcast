@@ -1,11 +1,20 @@
 import streamlit as st
 import xml.etree.ElementTree as ET
 import requests
+import os
+import tempfile
+from groq import Groq
+
+# Stellen Sie sicher, dass Sie den API-Schlüssel als Streamlit Secret gespeichert haben
+# und rufen Sie ihn wie folgt ab:
+groq_api_key = st.secrets["GROQ_API_KEY"]
+
+client = Groq(api_key=groq_api_key)
 
 def fetch_rss_content(url):
     try:
         response = requests.get(url)
-        response.raise_for_status()  # Raises an HTTPError for bad responses
+        response.raise_for_status()
         return response.text
     except requests.RequestException as e:
         st.error(f"Error fetching RSS feed: {e}")
@@ -37,7 +46,37 @@ def extract_podcast_info(xml_string):
     
     return podcast_info
 
-st.title('Podcast MP3 Link Extractor')
+def download_mp3(url):
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        return response.content
+    except requests.RequestException as e:
+        st.error(f"Error downloading MP3: {e}")
+        return None
+
+def transcribe_audio(audio_content):
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as temp_file:
+        temp_file.write(audio_content)
+        temp_file_path = temp_file.name
+
+    try:
+        with open(temp_file_path, "rb") as file:
+            transcription = client.audio.transcriptions.create(
+                file=(os.path.basename(temp_file_path), file),
+                model="whisper-large-v3",
+                response_format="text",
+                language="de",  # Angepasst für deutsche Podcasts
+                temperature=0.0
+            )
+        return transcription.text
+    except Exception as e:
+        st.error(f"Error during transcription: {e}")
+        return None
+    finally:
+        os.unlink(temp_file_path)
+
+st.title('Podcast MP3 Link Extractor and Transcriber')
 
 input_method = st.radio("Choose input method:", ("Paste XML", "Enter RSS URL"))
 
@@ -63,6 +102,20 @@ if xml_input:
             for info in podcast_info:
                 st.markdown(f"**{info['title']}**")
                 st.markdown(f"[Download MP3]({info['mp3_url']})")
+                
+                if st.button(f"Transcribe: {info['title'][:30]}..."):
+                    with st.spinner('Downloading and transcribing audio...'):
+                        audio_content = download_mp3(info['mp3_url'])
+                        if audio_content:
+                            transcription = transcribe_audio(audio_content)
+                            if transcription:
+                                st.success("Transcription complete!")
+                                st.text_area("Transcription:", value=transcription, height=200)
+                            else:
+                                st.error("Transcription failed.")
+                        else:
+                            st.error("Failed to download audio.")
+                
                 st.write("---")
         else:
             st.warning("No podcast episodes with MP3 links found in the provided XML.")
