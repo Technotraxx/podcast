@@ -1,7 +1,7 @@
 import streamlit as st
 import xml.etree.ElementTree as ET
 
-def extract_mp3_links(xml_string):
+def extract_podcast_info(xml_string):
     # Remove any leading whitespace and find the start of the XML declaration
     xml_string = xml_string.lstrip()
     start_index = xml_string.find('<?xml')
@@ -11,46 +11,44 @@ def extract_mp3_links(xml_string):
     # Parse the XML string
     root = ET.fromstring(xml_string)
     
-    # Find all enclosure elements
-    enclosures = root.findall(".//enclosure")
+    # Find all item elements
+    items = root.findall(".//item")
     
-    # Extract the MP3 links
-    mp3_links = []
-    for enclosure in enclosures:
-        url = enclosure.get('url')
-        if url and url.endswith('.mp3'):
-            mp3_links.append(url.split('?')[0])  # Remove query parameters
+    # Extract podcast information
+    podcast_info = []
+    for item in items:
+        title = item.find("title").text if item.find("title") is not None else "No title"
+        enclosure = item.find("enclosure")
+        if enclosure is not None:
+            mp3_url = enclosure.get('url')
+            if mp3_url and mp3_url.endswith('.mp3'):
+                mp3_url = mp3_url.split('?')[0]  # Remove query parameters
+                podcast_info.append({
+                    "title": title,
+                    "mp3_url": mp3_url
+                })
     
-    return mp3_links
+    return podcast_info
 
-st.title('MP3 Link Extractor from XML')
-
-# File uploader
-uploaded_file = st.file_uploader("Choose a TXT file containing XML", type="txt")
+st.title('Podcast MP3 Link Extractor')
 
 # Text area for manual input
-xml_input = st.text_area("Or paste your XML here:", height=300)
+xml_input = st.text_area("Paste your XML here:", height=300)
 
-if uploaded_file is not None:
-    # To read file as string:
-    xml_string = uploaded_file.getvalue().decode("utf-8")
-elif xml_input:
-    xml_string = xml_input
-else:
-    xml_string = None
-
-if xml_string:
+if xml_input:
     try:
-        links = extract_mp3_links(xml_string)
-        if links:
-            st.success(f"Found {len(links)} MP3 link(s):")
-            for link in links:
-                st.write(link)
+        podcast_info = extract_podcast_info(xml_input)
+        if podcast_info:
+            st.success(f"Found {len(podcast_info)} podcast episode(s) with MP3 links:")
+            for info in podcast_info:
+                st.write(f"Title: {info['title']}")
+                st.write(f"MP3 URL: {info['mp3_url']}")
+                st.write("---")
         else:
-            st.warning("No MP3 links found in the provided XML.")
+            st.warning("No podcast episodes with MP3 links found in the provided XML.")
     except ET.ParseError as e:
         st.error(f"Error parsing XML: {e}")
         st.text("First 100 characters of XML string:")
-        st.code(xml_string[:100])
+        st.code(xml_input[:100])
 else:
-    st.info("Please upload a TXT file containing XML or paste XML content to extract MP3 links.")
+    st.info("Please paste XML content to extract podcast information and MP3 links.")
