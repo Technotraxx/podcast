@@ -1,4 +1,4 @@
-streamlit
 yt-dlp
 pydub
-pytube
+pytube==15.0.0
+streamlit
