@@ -1,44 +1,56 @@
 import streamlit as st
-from pytube import YouTube
-from pydub import AudioSegment
-import os
+import xml.etree.ElementTree as ET
 
-# Funktion zum Herunterladen und Konvertieren von YouTube-Videos in MP3
-def download_youtube_video(url):
+def extract_mp3_links(xml_string):
+    # Remove any leading whitespace and find the start of the XML declaration
+    xml_string = xml_string.lstrip()
+    start_index = xml_string.find('<?xml')
+    if start_index != -1:
+        xml_string = xml_string[start_index:]
+    
+    # Parse the XML string
+    root = ET.fromstring(xml_string)
+    
+    # Find all enclosure elements
+    enclosures = root.findall(".//enclosure")
+    
+    # Extract the MP3 links
+    mp3_links = []
+    for enclosure in enclosures:
+        url = enclosure.get('url')
+        if url and url.endswith('.mp3'):
+            mp3_links.append(url.split('?')[0])  # Remove query parameters
+    
+    return mp3_links
+
+st.title('MP3 Link Extractor from XML')
+
+# File uploader
+uploaded_file = st.file_uploader("Choose a TXT file containing XML", type="txt")
+
+# Text area for manual input
+xml_input = st.text_area("Or paste your XML here:", height=300)
+
+if uploaded_file is not None:
+    # To read file as string:
+    xml_string = uploaded_file.getvalue().decode("utf-8")
+elif xml_input:
+    xml_string = xml_input
+else:
+    xml_string = None
+
+if xml_string:
     try:
-        # Herunterladen des Videos
-        yt = YouTube(url)
-        video = yt.streams.filter(only_audio=True).first()
-        out_file = video.download(output_path='.')
-
-        # Konvertieren in MP3
-        base, ext = os.path.splitext(out_file)
-        new_file = base + '.mp3'
-        audio = AudioSegment.from_file(out_file)
-        audio.export(new_file, format='mp3')
-        os.remove(out_file)  # Entfernen der ursprünglichen Datei
-
-        return new_file, yt.title
-    except Exception as e:
-        st.error(f"Fehler beim Herunterladen und Konvertieren des Videos: {e}")
-        return None, None
-
-# Streamlit App
-st.title("YouTube to MP3 Converter")
-
-# Eingabefeld für die YouTube-URL
-url = st.text_input("Geben Sie die URL des YouTube-Videos ein:")
-
-if url:
-    # Button zum Starten des Downloads und der Konvertierung
-    if st.button("Download und Konvertierung starten"):
-        with st.spinner('Herunterladen und Konvertieren...'):
-            mp3_file, video_title = download_youtube_video(url)
-            if mp3_file:
-                st.success(f"Das Video '{video_title}' wurde erfolgreich in MP3 umgewandelt.")
-                # Download-Link für die MP3-Datei
-                st.markdown(f"[MP3-Datei herunterladen](./{mp3_file})")
-
-# Hauptprogramm
-if __name__ == "__main__":
-    st.set_option('deprecation.showfileUploaderEncoding', False)
+        links = extract_mp3_links(xml_string)
+        if links:
+            st.success(f"Found {len(links)} MP3 link(s):")
+            for link in links:
+                st.write(link)
+        else:
+            st.warning("No MP3 links found in the provided XML.")
+    except ET.ParseError as e:
+        st.error(f"Error parsing XML: {e}")
+        st.text("First 100 characters of XML string:")
+        st.code(xml_string[:100])
+else:
+    st.info("Please upload a TXT file containing XML or paste XML content to extract MP3 links.")
