@@ -1,5 +1,15 @@
 import streamlit as st
 import xml.etree.ElementTree as ET
+import requests
+
+def fetch_rss_content(url):
+    try:
+        response = requests.get(url)
+        response.raise_for_status()  # Raises an HTTPError for bad responses
+        return response.text
+    except requests.RequestException as e:
+        st.error(f"Error fetching RSS feed: {e}")
+        return None
 
 def extract_podcast_info(xml_string):
     try:
@@ -29,7 +39,21 @@ def extract_podcast_info(xml_string):
 
 st.title('Podcast MP3 Link Extractor')
 
-xml_input = st.text_area("Paste your XML here:", height=300)
+input_method = st.radio("Choose input method:", ("Paste XML", "Enter RSS URL"))
+
+if input_method == "Enter RSS URL":
+    rss_url = st.text_input("Enter RSS URL:")
+    if rss_url:
+        xml_content = fetch_rss_content(rss_url)
+        if xml_content:
+            st.text_area("Fetched XML content:", value=xml_content, height=300)
+            xml_input = xml_content
+        else:
+            xml_input = None
+    else:
+        xml_input = None
+else:
+    xml_input = st.text_area("Paste your XML here:", height=300)
 
 if xml_input:
     podcast_info = extract_podcast_info(xml_input)
@@ -42,5 +66,5 @@ if xml_input:
                 st.write("---")
         else:
             st.warning("No podcast episodes with MP3 links found in the provided XML.")
-else:
+elif input_method == "Paste XML":
     st.info("Please paste XML content to extract podcast information and MP3 links.")
