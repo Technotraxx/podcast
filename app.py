@@ -1,49 +1,44 @@
 import streamlit as st
 from pytube import YouTube
-import io
-import re
+from pydub import AudioSegment
+import os
 
-def is_valid_youtube_url(url):
-    # Einfache Regex zur Überprüfung des YouTube-URL-Formats
-    youtube_regex = r'(https?://)?(www\.)?(youtube|youtu|youtube-nocookie)\.(com|be)/'
-    return re.match(youtube_regex, url) is not None
-
-def download_audio(url):
+# Funktion zum Herunterladen und Konvertieren von YouTube-Videos in MP3
+def download_youtube_video(url):
     try:
+        # Herunterladen des Videos
         yt = YouTube(url)
-        audio_stream = yt.streams.filter(only_audio=True).first()
-        if not audio_stream:
-            raise Exception("Kein Audiostream gefunden.")
-        buffer = io.BytesIO()
-        audio_stream.stream_to_buffer(buffer)
-        buffer.seek(0)
-        return buffer, yt.title
+        video = yt.streams.filter(only_audio=True).first()
+        out_file = video.download(output_path='.')
+
+        # Konvertieren in MP3
+        base, ext = os.path.splitext(out_file)
+        new_file = base + '.mp3'
+        audio = AudioSegment.from_file(out_file)
+        audio.export(new_file, format='mp3')
+        os.remove(out_file)  # Entfernen der ursprünglichen Datei
+
+        return new_file, yt.title
     except Exception as e:
-        raise Exception(f"Fehler beim Herunterladen: {str(e)}")
+        st.error(f"Fehler beim Herunterladen und Konvertieren des Videos: {e}")
+        return None, None
 
-st.title('YouTube zu MP3 Konverter')
+# Streamlit App
+st.title("YouTube to MP3 Converter")
 
-url = st.text_input('Geben Sie die YouTube-URL ein:')
-if st.button('Zu MP3 konvertieren'):
-    if url:
-        if not is_valid_youtube_url(url):
-            st.error('Bitte geben Sie eine gültige YouTube-URL ein.')
-        else:
-            try:
-                with st.spinner('Konvertiere...'):
-                    buffer, title = download_audio(url)
-                    st.success('Konvertierung abgeschlossen!')
-                    
-                    st.download_button(
-                        label="MP3 herunterladen",
-                        data=buffer,
-                        file_name=f"{title}.mp3",
-                        mime="audio/mpeg"
-                    )
-            except Exception as e:
-                st.error(f"Ein Fehler ist aufgetreten: {str(e)}")
-                st.info("Bitte versuchen Sie es später erneut oder probieren Sie eine andere URL.")
-    else:
-        st.warning('Bitte geben Sie eine YouTube-URL ein.')
+# Eingabefeld für die YouTube-URL
+url = st.text_input("Geben Sie die URL des YouTube-Videos ein:")
 
-st.write('Hinweis: Diese App dient nur Bildungszwecken. Bitte beachten Sie die Urheberrechtsgesetze und YouTubes Nutzungsbedingungen.')
+if url:
+    # Button zum Starten des Downloads und der Konvertierung
+    if st.button("Download und Konvertierung starten"):
+        with st.spinner('Herunterladen und Konvertieren...'):
+            mp3_file, video_title = download_youtube_video(url)
+            if mp3_file:
+                st.success(f"Das Video '{video_title}' wurde erfolgreich in MP3 umgewandelt.")
+                # Download-Link für die MP3-Datei
+                st.markdown(f"[MP3-Datei herunterladen](./{mp3_file})")
+
+# Hauptprogramm
+if __name__ == "__main__":
+    st.set_option('deprecation.showfileUploaderEncoding', False)
