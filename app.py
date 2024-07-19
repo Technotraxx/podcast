@@ -35,7 +35,28 @@ def extract_podcast_info(xml_string):
     
     return podcast_info
 
-st.title('Podcast MP3 Link Extractor')
+
+def get_binary_file_downloader_html(bin_file, file_label='File'):
+    with open(bin_file, 'rb') as f:
+        data = f.read()
+    bin_str = base64.b64encode(data).decode()
+    href = f'<a href="data:application/octet-stream;base64,{bin_str}" download="{os.path.basename(bin_file)}">Download {file_label}</a>'
+    return href
+
+def download_mp3(url, filename):
+    try:
+        response = requests.get(url)
+        response.raise_for_status()  # Raises an HTTPError if the HTTP request returned an unsuccessful status code
+        
+        with open(filename, 'wb') as file:
+            file.write(response.content)
+        
+        return True
+    except requests.RequestException as e:
+        st.error(f"Error downloading file: {e}")
+        return False
+
+st.title('Podcast MP3 Link Extractor and Downloader')
 
 xml_input = st.text_area("Paste your XML here:", height=300)
 
@@ -48,9 +69,27 @@ if xml_input:
             for info in podcast_info:
                 st.write(f"Title: {info['title']}")
                 st.write(f"MP3 URL: {info['mp3_url']}")
+                
+                # Create a unique filename for each episode
+                filename = f"{info['title'].replace(' ', '_')}.mp3"
+                
+                # Download button
+                if st.button(f"Download {info['title']}"):
+                    with st.spinner('Downloading...'):
+                        if download_mp3(info['mp3_url'], filename):
+                            st.success(f"Downloaded: {filename}")
+                            st.markdown(get_binary_file_downloader_html(filename, 'MP3'), unsafe_allow_html=True)
+                        else:
+                            st.error("Download failed. Please try again.")
+                
                 st.write("---")
         else:
             st.warning("No podcast episodes with MP3 links found in the provided XML.")
     st.write("XML processing complete.")
 else:
     st.info("Please paste XML content to extract podcast information and MP3 links.")
+
+# Clean up downloaded files
+for file in os.listdir():
+    if file.endswith(".mp3"):
+        os.remove(file)
