@@ -19,6 +19,8 @@ MAX_CHUNK_SIZE = 24 * 1024 * 1024  # 24MB to be safe
 CHUNK_OVERLAP_SEC = 5  # Overlap between chunks in seconds
 CACHE_DIR = Path("./cache")
 CACHE_DIR.mkdir(exist_ok=True)
+MAX_CACHE_AGE_DAYS = 7
+MAX_CACHE_SIZE_MB = 1000
 
 # Initialize session state
 if 'transcriptions' not in st.session_state:
@@ -39,6 +41,28 @@ def get_groq_client():
     return Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 client = get_groq_client()
+
+def cleanup_old_cache(max_age_days=MAX_CACHE_AGE_DAYS):
+    """Remove cache files older than max_age_days"""
+    now = datetime.now()
+    for cache_file in CACHE_DIR.glob("*.json"):
+        try:
+            with cache_file.open() as f:
+                data = json.load(f)
+                timestamp = datetime.fromisoformat(data['timestamp'])
+                if (now - timestamp).days > max_age_days:
+                    cache_file.unlink()
+        except (json.JSONDecodeError, KeyError, ValueError):
+            cache_file.unlink()  # Remove corrupted cache files
+
+def check_cache_size(max_size_mb=MAX_CACHE_SIZE_MB):
+    """Check if cache directory exceeds max size"""
+    total_size = sum(f.stat().st_size for f in CACHE_DIR.glob("*.json")) / (1024 * 1024)
+    return total_size <= max_size_mb
+
+def get_cache_key(url):
+    """Generate a unique cache key for a URL"""
+    return hashlib.md5(url.encode()).hexdigest()
 
 class AudioChunker:
     def __init__(self, max_size_bytes=MAX_CHUNK_SIZE, overlap_sec=CHUNK_OVERLAP_SEC):
@@ -141,15 +165,22 @@ def process_large_audio(audio_data, language='de'):
     status_text = st.empty()
     
     transcriptions = []
+    failed_chunks = []
     
     # Process chunks with progress tracking
     for i, chunk in enumerate(chunks):
         status_text.text(f"Processing chunk {i+1} of {len(chunks)}...")
-        progress_bar.progress((i) / len(chunks))
+        progress_bar.progress(i / len(chunks))
         
-        transcription = transcribe_chunk(chunk, language)
-        if transcription:
-            transcriptions.append(transcription)
+        try:
+            transcription = transcribe_chunk(chunk, language)
+            if transcription:
+                transcriptions.append(transcription)
+            else:
+                failed_chunks.append(i)
+        except Exception as e:
+            failed_chunks.append(i)
+            st.error(f"Chunk {i} failed: {str(e)}")
         
         # Small delay to avoid rate limiting
         time.sleep(1)
@@ -157,8 +188,11 @@ def process_large_audio(audio_data, language='de'):
     progress_bar.progress(1.0)
     status_text.empty()
     
+    if failed_chunks:
+        st.warning(f"Some chunks failed: {failed_chunks}")
+    
     # Combine transcriptions
-    return " ".join(transcriptions)
+    return merge_overlapping_text(" ".join(transcriptions))
 
 def merge_overlapping_text(text1, text2, min_overlap=10):
     """Merge two texts by finding overlapping content"""
@@ -234,121 +268,251 @@ def summarize_long_transcript(transcript, max_tokens=32000):
     
     return final_summary
 
-# Rest of the main application code remains the same, but replace the transcription part with:
+def fetch_rss_content(url):
+    """Fetch and cache RSS content"""
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        return response.text
+    except requests.RequestException as e:
+        st.error(f"Failed to fetch RSS feed: {str(e)}")
+        return None
 
-def get_cache_key(url):
-    """Generate a unique cache key for a URL"""
-    return hashlib.md5(url.encode()).hexdigest()
+def extract_podcast_info(xml_string):
+    """Extract and validate podcast information from XML"""
+    try:
+        root = ET.fromstring(xml_string)
+        channel = root.find('channel')
+        
+        # Extract podcast metadata
+        podcast_metadata = {
+            'title': channel.find('title').text if channel.find('title') is not None else "Unknown Podcast",
+            'description': channel.find('description').text if channel.find('description') is not None else "",
+            'language': channel.find('language').text if channel.find('language') is not None else "de"
+        }
+        
+        items = root.findall(".//item")
+        podcast_info = []
+        
+        for item in items:
+            episode = {}
+            
+            # Extract basic information
+            for tag in ['title', 'description', 'pubDate']:
+                elem = item.find(tag)
+                episode[tag] = elem.text if elem is not None else ""
+            
+            # Extract MP3 URL
+            enclosure = item.find("enclosure")
+            if enclosure is not None:
+                mp3_url = enclosure.get('url')
+                if mp3_url and '.mp3' in mp3_url:
+                    episode['mp3_url'] = mp3_url.split('.mp3')[0] + '.mp3'
+                    podcast_info.append(episode)
+        
+        return podcast_metadata, podcast_info
+    except ET.ParseError as e:
+        st.error(f"Invalid XML format: {str(e)}")
+        return None, None
+    except Exception as e:
+        st.error(f"Error processing podcast data: {str(e)}")
+        return None, None
 
-if st.button(f"Transcribe Episode", key=f"transcribe_{idx}"):
-    cache_key = get_cache_key(info['mp3_url'])
-    cache_file = CACHE_DIR / f"{cache_key}.json"
+def main():
+    st.title('🎙️ Podcast Transcriber Pro')
+    st.markdown("Transform your favorite podcasts into searchable text")
     
-    # Initialize variables
-    transcription = None
-    summary = None
+    # Settings sidebar
+    with st.sidebar:
+        st.header("Settings")
+        st.session_state.language = st.selectbox(
+            "Transcription Language",
+            options=['de', 'en', 'fr', 'es', 'it'],
+            format_func=lambda x: {'de': 'German', 'en': 'English', 'fr': 'French', 'es': 'Spanish', 'it': 'Italian'}[x]
+        )
+        
+        st.markdown("---")
+        st.markdown("### About")
+        st.markdown("This app helps you transcribe podcast episodes and generate summaries.")
     
-    if cache_file.exists():
-        with cache_file.open() as f:
-            try:
-                cached_data = json.load(f)
-                transcription = cached_data.get('transcription')
-                summary = cached_data.get('summary')  # Also cache the summary
-                st.success("Loaded transcription from cache!")
-            except json.JSONDecodeError:
-                st.warning("Cache file corrupted. Reprocessing audio...")
-                cache_file.unlink()  # Delete corrupted cache file
+    # Cleanup old cache files
+    cleanup_old_cache()
     
-    # If not in cache or cache loading failed, process the audio
-    if not transcription:
-        with st.spinner('Downloading audio...'):
-            audio_content = download_mp3_with_progress(info['mp3_url'])
-            
-        if audio_content:
-            file_size = len(audio_content)
-            
-            if file_size > MAX_CHUNK_SIZE:
-                st.info(f"Large file detected ({file_size//(1024*1024)}MB). Processing in chunks...")
-                transcription = process_large_audio(
-                    audio_content,
-                    language=st.session_state.language
-                )
-            else:
-                with st.spinner('Transcribing audio...'):
-                    transcription = transcribe_chunk(
-                        audio_content,
-                        language=st.session_state.language
-                    )
-            
-            if transcription:
-                # Generate summary if not already in cache
-                if not summary:
-                    with st.spinner('Generating summary...'):
-                        summary = summarize_long_transcript(transcription)
-                
-                # Cache both transcription and summary
-                cache_data = {
-                    'transcription': transcription,
-                    'summary': summary,
-                    'timestamp': datetime.now().isoformat()
-                }
-                with cache_file.open('w') as f:
-                    json.dump(cache_data, f)
-                
-                st.success("Processing complete!")
-            else:
-                st.error("Transcription failed.")
+    # Check cache size
+    if not check_cache_size():
+        st.warning("Cache size limit exceeded. Cleaning up old files...")
+        cleanup_old_cache(max_age_days=1)  # More aggressive cleanup
+    
+    # Main interface
+    input_method = st.radio(
+        "Choose input method:",
+        ("Enter RSS URL 🔗", "Paste XML 📝"),
+        help="Select how you want to input your podcast data"
+    )
+
+    if input_method == "Enter RSS URL 🔗":
+        rss_url = st.text_input(
+            "Enter RSS URL:",
+            placeholder="https://example.com/feed.xml"
+        )
+        
+        if rss_url:
+            with st.spinner("Fetching podcast feed..."):
+                xml_content = fetch_rss_content(rss_url)
+                if xml_content:
+                    st.success("RSS feed fetched successfully!")
+                    with st.expander("View Raw XML"):
+                        st.code(xml_content, language="xml")
+                    xml_input = xml_content
+                else:
+                    xml_input = None
         else:
-            st.error("Failed to download audio.")
-    
-    # Display results (whether from cache or new processing)
-    if transcription:
-        tab1, tab2 = st.tabs(["Full Transcription", "Summary"])
+            xml_input = None
+    else:
+        xml_input = st.text_area(
+            "Paste your XML here:",
+            height=300,
+            help="Paste the raw XML content of your podcast feed"
+        )
+
+    if xml_input:
+        podcast_metadata, podcast_info = extract_podcast_info(xml_input)
         
-        with tab1:
-            st.text_area(
-                "Full Transcription:",
-                value=transcription,
-                height=400
-            )
+        if podcast_metadata and podcast_info:
+            st.header(podcast_metadata['title'])
+            st.markdown(podcast_metadata['description'])
             
-            # Download buttons
-            col1, col2 = st.columns(2)
-            with col1:
-                st.download_button(
-                    "Download Transcription (TXT)",
-                    transcription,
-                    file_name=f"{info['title']}_transcript.txt"
-                )
-            with col2:
-                st.download_button(
-                    "Download Transcription (JSON)",
-                    json.dumps({
-                        'title': info['title'],
-                        'date': info['pubDate'],
-                        'transcription': transcription,
-                        'summary': summary
-                    }, indent=2),
-                    file_name=f"{info['title']}_transcript.json"
-                )
-        
-        with tab2:
-            if summary:
-                st.markdown("### Episode Summary")
-                st.markdown(summary)
-            else:
-                with st.spinner('Generating summary...'):
-                    summary = summarize_long_transcript(transcription)
-                    if summary:
-                        st.markdown("### Episode Summary")
-                        st.markdown(summary)
-                        # Update cache with new summary
-                        cache_data = {
-                            'transcription': transcription,
-                            'summary': summary,
-                            'timestamp': datetime.now().isoformat()
-                        }
-                        with cache_file.open('w') as f:
-                            json.dump(cache_data, f)
-                    else:
-                        st.warning("Summary generation failed.")
+            st.success(f"Found {len(podcast_info)} podcast episode(s)")
+            
+            # Display episodes in columns
+            for idx, info in enumerate(podcast_info):
+                with st.container():
+                    col1, col2 = st.columns([2, 1])
+                    
+                    with col1:
+                        st.markdown(f"### {info['title']}")
+                        st.markdown(f"*Published: {info['pubDate']}*")
+                        
+                        with st.expander("Show Description"):
+                            st.markdown(info['description'])
+                    
+                    with col2:
+                        st.markdown(f"[Download MP3]({info['mp3_url']})")
+                        
+                        if st.button(f"Transcribe Episode", key=f"transcribe_{idx}"):
+                            cache_key = get_cache_key(info['mp3_url'])
+                            cache_file = CACHE_DIR / f"{cache_key}.json"
+                            
+                            # Initialize variables
+                            transcription = None
+                            summary = None
+                            
+                            if cache_file.exists():
+                                with cache_file.open() as f:
+                                    try:
+                                        cached_data = json.load(f)
+                                        transcription = cached_data.get('transcription')
+                                        summary = cached_data.get('summary')
+                                        st.success("Loaded transcription from cache!")
+                                    except json.JSONDecodeError:
+                                        st.warning("Cache file corrupted. Reprocessing audio...")
+                                        cache_file.unlink()
+                            
+                            # If not in cache or cache loading failed, process the audio
+                            if not transcription:
+                                with st.spinner('Downloading audio...'):
+                                    audio_content = download_mp3_with_progress(info['mp3_url'])
+                                    
+                                if audio_content:
+                                    file_size = len(audio_content)
+                                    
+                                    if file_size > MAX_CHUNK_SIZE:
+                                        st.info(f"Large file detected ({file_size//(1024*1024)}MB). Processing in chunks...")
+                                        transcription = process_large_audio(
+                                            audio_content,
+                                            language=st.session_state.language
+                                        )
+                                    else:
+                                        with st.spinner('Transcribing audio...'):
+                                            transcription = transcribe_chunk(
+                                                audio_content,
+                                                language=st.session_state.language
+                                            )
+                                    
+                                    if transcription:
+                                        # Generate summary if not already in cache
+                                        if not summary:
+                                            with st.spinner('Generating summary...'):
+                                                summary = summarize_long_transcript(transcription)
+                                        
+                                        # Cache both transcription and summary
+                                        cache_data = {
+                                            'transcription': transcription,
+                                            'summary': summary,
+                                            'timestamp': datetime.now().isoformat()
+                                        }
+                                        with cache_file.open('w') as f:
+                                            json.dump(cache_data, f)
+                                        
+                                        st.success("Processing complete!")
+                                    else:
+                                        st.error("Transcription failed.")
+                                else:
+                                    st.error("Failed to download audio.")
+                            
+                            # Display results (whether from cache or new processing)
+                            if transcription:
+                                tab1, tab2 = st.tabs(["Full Transcription", "Summary"])
+                                
+                                with tab1:
+                                    st.text_area(
+                                        "Full Transcription:",
+                                        value=transcription,
+                                        height=400
+                                    )
+                                    
+                                    # Download buttons
+                                    col1, col2 = st.columns(2)
+                                    with col1:
+                                        st.download_button(
+                                            "Download Transcription (TXT)",
+                                            transcription,
+                                            file_name=f"{info['title']}_transcript.txt"
+                                        )
+                                    with col2:
+                                        st.download_button(
+                                            "Download Transcription (JSON)",
+                                            json.dumps({
+                                                'title': info['title'],
+                                                'date': info['pubDate'],
+                                                'transcription': transcription,
+                                                'summary': summary
+                                            }, indent=2),
+                                            file_name=f"{info['title']}_transcript.json"
+                                        )
+                                
+                                with tab2:
+                                    if summary:
+                                        st.markdown("### Episode Summary")
+                                        st.markdown(summary)
+                                    else:
+                                        with st.spinner('Generating summary...'):
+                                            summary = summarize_long_transcript(transcription)
+                                            if summary:
+                                                st.markdown("### Episode Summary")
+                                                st.markdown(summary)
+                                                # Update cache with new summary
+                                                cache_data = {
+                                                    'transcription': transcription,
+                                                    'summary': summary,
+                                                    'timestamp': datetime.now().isoformat()
+                                                }
+                                                with cache_file.open('w') as f:
+                                                    json.dump(cache_data, f)
+                                            else:
+                                                st.warning("Summary generation failed.")
+                    
+                    st.markdown("---")
+
+if __name__ == "__main__":
+    main()
