@@ -69,7 +69,6 @@ def transcribe_audio(audio_content):
                 language="de",  # Angepasst für deutsche Podcasts
                 temperature=0.0
             )
-        # Die API gibt direkt den transkribierten Text zurück, nicht ein Objekt
         return transcription
     except Exception as e:
         st.error(f"Error during transcription: {e}")
@@ -79,39 +78,41 @@ def transcribe_audio(audio_content):
 
 st.title('Podcast MP3 Link Extractor and Transcriber')
 
-input_method = st.radio("Choose input method:", ("Paste XML", "Enter RSS URL"))
+input_method = st.radio("Choose input method:", ("Paste XML", "Enter RSS URL"), key="input_method_radio")
 
 if input_method == "Enter RSS URL":
-    rss_url = st.text_input("Enter RSS URL:")
+    rss_url = st.text_input("Enter RSS URL:", key="rss_url_input")
     if rss_url:
         xml_content = fetch_rss_content(rss_url)
         if xml_content:
-            st.text_area("Fetched XML content:", value=xml_content, height=300)
+            st.text_area("Fetched XML content:", value=xml_content, height=300, key="fetched_xml_area")
             xml_input = xml_content
         else:
             xml_input = None
     else:
         xml_input = None
 else:
-    xml_input = st.text_area("Paste your XML here:", height=300)
+    xml_input = st.text_area("Paste your XML here:", height=300, key="xml_input_area")
 
 if xml_input:
     podcast_info = extract_podcast_info(xml_input)
     if podcast_info is not None:
         if podcast_info:
             st.success(f"Found {len(podcast_info)} podcast episode(s) with MP3 links:")
-            for info in podcast_info:
+            for idx, info in enumerate(podcast_info):
                 st.markdown(f"**{info['title']}**")
                 st.markdown(f"[Download MP3]({info['mp3_url']})")
                 
-                if st.button(f"Transcribe: {info['title'][:30]}..."):
+                # Add unique key for each button using the index
+                if st.button(f"Transcribe: {info['title'][:30]}...", key=f"transcribe_button_{idx}"):
                     with st.spinner('Downloading and transcribing audio...'):
                         audio_content = download_mp3(info['mp3_url'])
                         if audio_content:
                             transcription = transcribe_audio(audio_content)
                             if transcription:
                                 st.success("Transcription complete!")
-                                st.text_area("Transcription:", value=transcription, height=200)
+                                # Add unique key for each transcription text area
+                                st.text_area("Transcription:", value=transcription, height=200, key=f"transcription_area_{idx}")
                             else:
                                 st.error("Transcription failed.")
                         else:
