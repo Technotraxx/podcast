@@ -71,7 +71,7 @@ class AudioChunker:
 
     def get_chunk_size_ms(self, audio_segment):
         """Calculate chunk size in milliseconds based on file size and duration"""
-        bytes_per_ms = len(audio_segment) / len(audio_segment)
+        bytes_per_ms = len(audio_segment.raw_data) / len(audio_segment)
         max_ms = self.max_size_bytes / bytes_per_ms
         return int(max_ms)
 
@@ -133,6 +133,18 @@ def download_mp3_with_progress(url):
         st.error(f"Failed to download audio: {str(e)}")
         return None
 
+# Cache file operations helper
+def safe_write_cache(cache_file: Path, data: dict):
+    """Safely write data to cache file"""
+    try:
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        with cache_file.open('w') as f:
+            json.dump(data, f)
+        return True
+    except Exception as e:
+        st.error(f"Failed to write cache: {str(e)}")
+        return False
+
 def transcribe_chunk(chunk_data, language='de'):
     """Transcribe a single audio chunk"""
     with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as temp_file:
@@ -192,7 +204,10 @@ def process_large_audio(audio_data, language='de'):
         st.warning(f"Some chunks failed: {failed_chunks}")
     
     # Combine transcriptions
-    return merge_overlapping_text(" ".join(transcriptions))
+    final_text = transcriptions[0] if transcriptions else ""
+    for i in range(1, len(transcriptions)):
+    final_text = merge_overlapping_text(final_text, transcriptions[i])
+    return final_text
 
 def merge_overlapping_text(text1, text2, min_overlap=10):
     """Merge two texts by finding overlapping content"""
