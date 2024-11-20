@@ -206,7 +206,7 @@ def process_large_audio(audio_data, language='de'):
     # Combine transcriptions
     final_text = transcriptions[0] if transcriptions else ""
     for i in range(1, len(transcriptions)):
-    final_text = merge_overlapping_text(final_text, transcriptions[i])
+        final_text = merge_overlapping_text(final_text, transcriptions[i])
     return final_text
 
 def merge_overlapping_text(text1, text2, min_overlap=10):
