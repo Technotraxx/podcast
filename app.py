@@ -238,12 +238,23 @@ if st.button(f"Transcribe Episode", key=f"transcribe_{idx}"):
     cache_key = get_cache_key(info['mp3_url'])
     cache_file = CACHE_DIR / f"{cache_key}.json"
     
+    # Initialize variables
+    transcription = None
+    summary = None
+    
     if cache_file.exists():
         with cache_file.open() as f:
-            cached_data = json.load(f)
-            transcription = cached_data['transcription']
-            st.success("Loaded transcription from cache!")
-    else:
+            try:
+                cached_data = json.load(f)
+                transcription = cached_data.get('transcription')
+                summary = cached_data.get('summary')  # Also cache the summary
+                st.success("Loaded transcription from cache!")
+            except json.JSONDecodeError:
+                st.warning("Cache file corrupted. Reprocessing audio...")
+                cache_file.unlink()  # Delete corrupted cache file
+    
+    # If not in cache or cache loading failed, process the audio
+    if not transcription:
         with st.spinner('Downloading audio...'):
             audio_content = download_mp3_with_progress(info['mp3_url'])
             
@@ -264,53 +275,75 @@ if st.button(f"Transcribe Episode", key=f"transcribe_{idx}"):
                     )
             
             if transcription:
-                # Cache the transcription
+                # Generate summary if not already in cache
+                if not summary:
+                    with st.spinner('Generating summary...'):
+                        summary = summarize_long_transcript(transcription)
+                
+                # Cache both transcription and summary
                 cache_data = {
                     'transcription': transcription,
+                    'summary': summary,
                     'timestamp': datetime.now().isoformat()
                 }
                 with cache_file.open('w') as f:
                     json.dump(cache_data, f)
                 
-                # Generate summary
+                st.success("Processing complete!")
+            else:
+                st.error("Transcription failed.")
+        else:
+            st.error("Failed to download audio.")
+    
+    # Display results (whether from cache or new processing)
+    if transcription:
+        tab1, tab2 = st.tabs(["Full Transcription", "Summary"])
+        
+        with tab1:
+            st.text_area(
+                "Full Transcription:",
+                value=transcription,
+                height=400
+            )
+            
+            # Download buttons
+            col1, col2 = st.columns(2)
+            with col1:
+                st.download_button(
+                    "Download Transcription (TXT)",
+                    transcription,
+                    file_name=f"{info['title']}_transcript.txt"
+                )
+            with col2:
+                st.download_button(
+                    "Download Transcription (JSON)",
+                    json.dumps({
+                        'title': info['title'],
+                        'date': info['pubDate'],
+                        'transcription': transcription,
+                        'summary': summary
+                    }, indent=2),
+                    file_name=f"{info['title']}_transcript.json"
+                )
+        
+        with tab2:
+            if summary:
+                st.markdown("### Episode Summary")
+                st.markdown(summary)
+            else:
                 with st.spinner('Generating summary...'):
                     summary = summarize_long_transcript(transcription)
-                
-                # Display results in tabs
-                st.success("Processing complete!")
-                
-                tab1, tab2 = st.tabs(["Full Transcription", "Summary"])
-                
-                with tab1:
-                    st.text_area(
-                        "Full Transcription:",
-                        value=transcription,
-                        height=400
-                    )
-                    
-                    # Download buttons
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.download_button(
-                            "Download Transcription (TXT)",
-                            transcription,
-                            file_name=f"{info['title']}_transcript.txt"
-                        )
-                    with col2:
-                        st.download_button(
-                            "Download Transcription (JSON)",
-                            json.dumps({
-                                'title': info['title'],
-                                'date': info['pubDate'],
-                                'transcription': transcription
-                            }, indent=2),
-                            file_name=f"{info['title']}_transcript.json"
-                        )
-                
-                with tab2:
                     if summary:
                         st.markdown("### Episode Summary")
                         st.markdown(summary)
+                        # Update cache with new summary
+                        cache_data = {
+                            'transcription': transcription,
+                            'summary': summary,
+                            'timestamp': datetime.now().isoformat()
+                        }
+                        with cache_file.open('w') as f:
+                            json.dump(cache_data, f)
                     else:
                         st.warning("Summary generation failed.")
             else:
