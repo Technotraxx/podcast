@@ -17,6 +17,8 @@ import time
 # Constants
 MAX_CHUNK_SIZE = 24 * 1024 * 1024  # 24MB to be safe
 CHUNK_OVERLAP_SEC = 5  # Overlap between chunks in seconds
+CACHE_DIR = Path("./cache")
+CACHE_DIR.mkdir(exist_ok=True)
 
 # Initialize session state
 if 'transcriptions' not in st.session_state:
@@ -234,6 +236,10 @@ def summarize_long_transcript(transcript, max_tokens=32000):
 
 # Rest of the main application code remains the same, but replace the transcription part with:
 
+def get_cache_key(url):
+    """Generate a unique cache key for a URL"""
+    return hashlib.md5(url.encode()).hexdigest()
+
 if st.button(f"Transcribe Episode", key=f"transcribe_{idx}"):
     cache_key = get_cache_key(info['mp3_url'])
     cache_file = CACHE_DIR / f"{cache_key}.json"
@@ -346,7 +352,3 @@ if st.button(f"Transcribe Episode", key=f"transcribe_{idx}"):
                             json.dump(cache_data, f)
                     else:
                         st.warning("Summary generation failed.")
-            else:
-                st.error("Transcription failed.")
-        else:
-            st.error("Failed to download audio.")
