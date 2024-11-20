@@ -4,6 +4,7 @@ import requests
 import os
 import tempfile
 from groq import Groq
+import math
 
 # Stellen Sie sicher, dass Sie den API-Schlüssel als Streamlit Secret gespeichert haben
 # und rufen Sie ihn wie folgt ab:
@@ -94,6 +95,15 @@ if input_method == "Enter RSS URL":
 else:
     xml_input = st.text_area("Paste your XML here:", height=300, key="xml_input_area")
 
+num_episodes = len(podcast_info)
+episodes_per_page = 5
+num_pages = math.ceil(num_episodes / episodes_per_page)
+page = st.selectbox("Go to page:", range(1, num_pages + 1))
+start_idx = (page - 1) * episodes_per_page
+end_idx = start_idx + episodes_per_page
+
+for idx, info in enumerate(podcast_info[start_idx:end_idx]):
+
 if xml_input:
     podcast_info = extract_podcast_info(xml_input)
     if podcast_info is not None:
@@ -111,8 +121,14 @@ if xml_input:
                             transcription = transcribe_audio(audio_content)
                             if transcription:
                                 st.success("Transcription complete!")
-                                # Add unique key for each transcription text area
                                 st.text_area("Transcription:", value=transcription, height=200, key=f"transcription_area_{idx}")
+                                st.download_button(
+                                    label="Download Transcription",
+                                    data=transcription.encode(),
+                                    file_name=f"transcription_{idx}.txt",
+                                    mime="text/plain",
+                                    key=f"download_button_{idx}"
+                                )
                             else:
                                 st.error("Transcription failed.")
                         else:
